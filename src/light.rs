@@ -23,7 +23,7 @@ impl Light {
     }
 
     fn add_checksum(send_value: &[u8]) -> Vec<u8> {
-        let mut return_array = Vec::new();
+        let mut return_array = vec![];
         let mut check_sum: u8 = 0;
 
         for value in send_value {

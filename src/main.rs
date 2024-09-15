@@ -15,7 +15,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().collect();
 
     if args.len() == 2 && args[1] == "scan" {
-        let controller = light_controller::LightController::new(Vec::new()).await;
+        let controller = light_controller::LightController::new(vec![]).await;
         controller.scan().await?;
     } else {
         let config = Config::from_file("data/config.json").await.unwrap();
