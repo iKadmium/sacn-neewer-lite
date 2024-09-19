@@ -1,3 +1,4 @@
+pub mod color;
 pub mod config;
 pub mod light;
 pub mod light_controller;

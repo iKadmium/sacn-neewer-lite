@@ -1,1 +1,1 @@
-pub mod light_tests;
+pub mod color_tests;
