@@ -29,65 +29,65 @@ impl SacnDmxPacket {
             cid,
         }
     }
-}
 
-pub fn from_bytes(bytes: Vec<u8>) -> Result<SacnDmxPacket, &'static str> {
-    if bytes.len() < 38 {
-        return Err("Byte array too short");
+    pub fn from_bytes(bytes: Vec<u8>) -> Result<SacnDmxPacket, &'static str> {
+        if bytes.len() < 38 {
+            return Err("Byte array too short");
+        }
+
+        let source_name = String::from_utf8_lossy(&bytes[44..108])
+            .trim_end_matches('\0')
+            .to_string();
+        let universe = u16::from_be_bytes([bytes[113], bytes[114]]);
+        let priority = bytes[108];
+        let sequence_number = bytes[111];
+        let options = bytes[112];
+        let dmx_data_len = u16::from_be_bytes([bytes[123], bytes[124]]) as usize;
+        let dmx_data = bytes[125..(125 + dmx_data_len)].to_vec();
+        let mut cid = [0u8; 16];
+        cid.copy_from_slice(&bytes[22..38]);
+
+        Ok(SacnDmxPacket {
+            source_name,
+            universe,
+            priority,
+            sequence_number,
+            options,
+            dmx_data,
+            cid,
+        })
     }
 
-    let source_name = String::from_utf8_lossy(&bytes[44..108])
-        .trim_end_matches('\0')
-        .to_string();
-    let universe = u16::from_be_bytes([bytes[113], bytes[114]]);
-    let priority = bytes[108];
-    let sequence_number = bytes[111];
-    let options = bytes[112];
-    let dmx_data_len = u16::from_be_bytes([bytes[123], bytes[124]]) as usize;
-    let dmx_data = bytes[125..(125 + dmx_data_len)].to_vec();
-    let mut cid = [0u8; 16];
-    cid.copy_from_slice(&bytes[22..38]);
+    pub fn is_data_packet(bytes: &[u8]) -> bool {
+        // Check if the byte vector is long enough to be a valid Data Packet
+        if bytes.len() < 38 {
+            return false;
+        }
 
-    Ok(SacnDmxPacket {
-        source_name,
-        universe,
-        priority,
-        sequence_number,
-        options,
-        dmx_data,
-        cid,
-    })
-}
+        // Check the ACN Packet Identifier ("ASC-E1.17")
+        let acn_pid = &bytes[4..16];
+        if acn_pid != b"ASC-E1.17\0\0\0" {
+            return false;
+        }
 
-pub fn is_data_packet(bytes: &[u8]) -> bool {
-    // Check if the byte vector is long enough to be a valid Data Packet
-    if bytes.len() < 38 {
-        return false;
+        // Check the Vector for the Root Layer (0x00000004)
+        let vector_root_layer = u32::from_be_bytes([bytes[18], bytes[19], bytes[20], bytes[21]]);
+        if vector_root_layer != 0x00000004 {
+            return false;
+        }
+
+        // Check the Vector for the Framing Layer (0x00000002)
+        let vector_framing_layer = u32::from_be_bytes([bytes[40], bytes[41], bytes[42], bytes[43]]);
+        if vector_framing_layer != 0x00000002 {
+            return false;
+        }
+
+        // Check the Vector for the DMP Layer (0x02)
+        let vector_dmp_layer = bytes[117];
+        if vector_dmp_layer != 0x02 {
+            return false;
+        }
+
+        true
     }
-
-    // Check the ACN Packet Identifier ("ASC-E1.17")
-    let acn_pid = &bytes[4..16];
-    if acn_pid != b"ASC-E1.17\0\0\0" {
-        return false;
-    }
-
-    // Check the Vector for the Root Layer (0x00000004)
-    let vector_root_layer = u32::from_be_bytes([bytes[18], bytes[19], bytes[20], bytes[21]]);
-    if vector_root_layer != 0x00000004 {
-        return false;
-    }
-
-    // Check the Vector for the Framing Layer (0x00000002)
-    let vector_framing_layer = u32::from_be_bytes([bytes[40], bytes[41], bytes[42], bytes[43]]);
-    if vector_framing_layer != 0x00000002 {
-        return false;
-    }
-
-    // Check the Vector for the DMP Layer (0x02)
-    let vector_dmp_layer = bytes[117];
-    if vector_dmp_layer != 0x02 {
-        return false;
-    }
-
-    true
 }

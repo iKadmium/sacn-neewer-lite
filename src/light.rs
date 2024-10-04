@@ -53,12 +53,12 @@ impl Light {
 
         let lock = self.peripheral.read().await;
 
-        let peripheral = lock.as_ref().unwrap();
-        let chars = peripheral.characteristics();
-        let cmd_char = chars.iter().find(|c| c.uuid == *write_uuid).unwrap();
-
         // find the characteristic we want
         if lock.is_some() {
+            let peripheral = lock.as_ref().unwrap();
+            let chars = peripheral.characteristics();
+            let cmd_char = chars.iter().find(|c| c.uuid == *write_uuid).unwrap();
+
             return peripheral
                 .write(cmd_char, &color_cmd, WriteType::WithoutResponse)
                 .await;
@@ -131,12 +131,11 @@ impl Light {
         let adapters = manager.adapters().await.unwrap();
         let central = adapters.into_iter().nth(0).unwrap();
 
-        println!("Looking for {:?}", self.id);
-
         loop {
-            let connected = self.is_connected().await.unwrap();
-            if !connected {
-                println!("Reconnecting");
+            if !self.is_connected().await.unwrap() {
+                println!("Looking for {:?}", self.id);
+            }
+            while !self.is_connected().await.unwrap() {
                 for p in central.peripherals().await.unwrap() {
                     let props_result = p.properties().await;
 
@@ -149,6 +148,7 @@ impl Light {
                         println!("Failed to get properties for peripheral");
                     }
                 }
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
             }
             let send_result = self.send_color().await;
             if send_result.is_err() {

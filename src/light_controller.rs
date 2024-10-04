@@ -6,12 +6,7 @@ use btleplug::{
 };
 use tokio::{signal, time};
 
-use crate::{
-    config::Config,
-    light::Light,
-    sacn_client::SacnClient,
-    sacn_packet::{from_bytes, is_data_packet, SacnDmxPacket},
-};
+use crate::{config::Config, light::Light, sacn_client::SacnClient, sacn_packet::SacnDmxPacket};
 
 pub struct LightController {
     sacn_client: Option<SacnClient>,
@@ -35,13 +30,11 @@ impl LightController {
 
     async fn handle_packet(&self, packet: &SacnDmxPacket) -> Result<(), btleplug::Error> {
         for light in self.lights.iter() {
-            if light.is_connected().await.unwrap() && light.get_universe() == packet.universe {
+            if light.get_universe() == packet.universe {
                 let red = packet.dmx_data[light.get_address() as usize];
                 let green = packet.dmx_data[light.get_address() as usize + 1];
                 let blue = packet.dmx_data[light.get_address() as usize + 2];
                 light.set_color_rgb(red, green, blue).await;
-            } else {
-                println!("Light not connected or wrong universe");
             }
         }
         Ok(())
@@ -63,8 +56,8 @@ impl LightController {
                 amt = socket.recv(&mut buf) => {
                     println!("Received data");
                     let packet = &buf[..amt.unwrap()];
-                    if is_data_packet(packet) {
-                        let sacn_packet = from_bytes(packet.to_vec()).unwrap();
+                    if SacnDmxPacket::is_data_packet(packet) {
+                        let sacn_packet = SacnDmxPacket::from_bytes(packet.to_vec()).unwrap();
                         if let Err(e) = self.handle_packet(&sacn_packet).await {
                             eprintln!("Error handling packet: {:?}", e);
                         }
