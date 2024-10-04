@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::color;
+    use crate::color::Color;
 
     #[test]
     fn test_rgb_to_hsi_red() {
@@ -12,7 +12,7 @@ mod tests {
         let expected_output = (0_u16, 100_u8, 100_u8);
 
         // Act: Call the function under test
-        let result = color::rgb_to_hsv(red, green, blue);
+        let result = Color::new(red, green, blue).to_hsv();
 
         // Assert: Verify the expected output
         assert_eq!(result, expected_output);
@@ -28,7 +28,7 @@ mod tests {
         let expected_output = (120_u16, 100_u8, 100_u8);
 
         // Act: Call the function under test
-        let result = color::rgb_to_hsv(red, green, blue);
+        let result = Color::new(red, green, blue).to_hsv();
 
         // Assert: Verify the expected output
         assert_eq!(result, expected_output);
@@ -44,7 +44,7 @@ mod tests {
         let expected_output = (240_u16, 100_u8, 100_u8);
 
         // Act: Call the function under test
-        let result = color::rgb_to_hsv(red, green, blue);
+        let result = Color::new(red, green, blue).to_hsv();
 
         // Assert: Verify the expected output
         assert_eq!(result, expected_output);
@@ -60,7 +60,7 @@ mod tests {
         let expected_output = (300_u16, 100_u8, 100_u8);
 
         // Act: Call the function under test
-        let result = color::rgb_to_hsv(red, green, blue);
+        let result = Color::new(red, green, blue).to_hsv();
 
         // Assert: Verify the expected output
         assert_eq!(result, expected_output);
@@ -76,7 +76,7 @@ mod tests {
         let expected_output = (180_u16, 100_u8, 100_u8);
 
         // Act: Call the function under test
-        let result = color::rgb_to_hsv(red, green, blue);
+        let result = Color::new(red, green, blue).to_hsv();
 
         // Assert: Verify the expected output
         assert_eq!(result, expected_output);
@@ -92,7 +92,7 @@ mod tests {
         let expected_output = (60_u16, 100_u8, 100_u8);
 
         // Act: Call the function under test
-        let result = color::rgb_to_hsv(red, green, blue);
+        let result = Color::new(red, green, blue).to_hsv();
 
         // Assert: Verify the expected output
         assert_eq!(result, expected_output);
@@ -108,7 +108,7 @@ mod tests {
         let expected_output = (0_u16, 0_u8, 0_u8);
 
         // Act: Call the function under test
-        let result = color::rgb_to_hsv(red, green, blue);
+        let result = Color::new(red, green, blue).to_hsv();
 
         // Assert: Verify the expected output
         assert_eq!(result, expected_output);
@@ -124,7 +124,7 @@ mod tests {
         let expected_output = (0_u16, 0_u8, 100_u8);
 
         // Act: Call the function under test
-        let result = color::rgb_to_hsv(red, green, blue);
+        let result = Color::new(red, green, blue).to_hsv();
 
         // Assert: Verify the expected output
         assert_eq!(result, expected_output);

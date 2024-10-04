@@ -1,8 +1,8 @@
-use std::{io, time::Duration};
+use std::time::Duration;
 
 use btleplug::{
-    api::{Central, Manager as _, Peripheral as _, ScanFilter},
-    platform::{Adapter, Manager},
+    api::{Central, Peripheral as _},
+    platform::Adapter,
 };
 use tokio::{signal, time};
 
@@ -14,61 +14,53 @@ use crate::{
 };
 
 pub struct LightController {
-    sacn_client: SacnClient,
+    sacn_client: Option<SacnClient>,
     lights: Vec<Light>,
-    bt_adapter: Adapter,
 }
 
 impl LightController {
-    pub async fn new(universes: Vec<u16>) -> Self {
-        let client = SacnClient::new(universes).await.unwrap();
-
-        let manager = Manager::new().await.unwrap();
-
-        // get the first bluetooth adapter
-        let adapters = manager.adapters().await.unwrap();
-        let bt_adapter = adapters.into_iter().nth(0).unwrap();
+    pub async fn new(config: &Config) -> Self {
+        let mut lights = vec![];
+        for light_config in config.lights.iter() {
+            let light = Light::new(light_config.id, light_config.universe, light_config.address);
+            lights.push(light);
+        }
+        let sacn_client = SacnClient::new(config.get_universes()).await.unwrap();
 
         Self {
-            sacn_client: client,
-            lights: vec![],
-            bt_adapter,
+            sacn_client: Some(sacn_client),
+            lights,
         }
     }
 
     async fn handle_packet(&self, packet: &SacnDmxPacket) -> Result<(), btleplug::Error> {
-        for light in &self.lights {
+        for light in self.lights.iter() {
             if light.is_connected().await.unwrap() && light.get_universe() == packet.universe {
                 let red = packet.dmx_data[light.get_address() as usize];
                 let green = packet.dmx_data[light.get_address() as usize + 1];
                 let blue = packet.dmx_data[light.get_address() as usize + 2];
-                light.set_color_rgb(red, green, blue).await?;
+                light.set_color_rgb(red, green, blue).await;
+            } else {
+                println!("Light not connected or wrong universe");
             }
         }
         Ok(())
     }
 
-    pub async fn listen(&mut self, config: Config) -> io::Result<()> {
+    pub async fn listen(&self) {
         let mut buf = [0; 1024];
 
-        // start scanning for devices
-        self.bt_adapter
-            .start_scan(ScanFilter::default())
-            .await
-            .unwrap();
+        let socket = self.sacn_client.as_ref().unwrap().get_socket();
 
         loop {
             let sigterm_future = signal::ctrl_c();
 
-            self.find_lights(&config).await;
-            self.delete_disconnected_lights().await;
-
             let _result = tokio::select! {
                 _sigterm = sigterm_future => {
                     println!("Received SIGTERM, shutting down...");
-                    break(Ok(()));
+                    break;
                 }
-                amt = self.sacn_client.get_socket().recv(&mut buf) => {
+                amt = socket.recv(&mut buf) => {
                     println!("Received data");
                     let packet = &buf[..amt.unwrap()];
                     if is_data_packet(packet) {
@@ -85,56 +77,27 @@ impl LightController {
         }
     }
 
-    async fn find_lights(&mut self, config: &Config) {
-        for light_config in &config.lights {
-            let light_ids: Vec<_> =
-                futures::future::join_all(self.lights.iter().map(|light| light.get_id())).await;
-
-            if !light_ids.iter().any(|id| *id == light_config.id) {
-                if let Some(light) = Light::find_by_id(
-                    &self.bt_adapter,
-                    light_config.universe,
-                    light_config.address,
-                    light_config.id,
-                )
-                .await
-                {
-                    if let Err(e) = light.connect().await {
-                        eprintln!("Failed to connect: {:?}", e);
-                        continue;
-                    }
-                    if let Err(e) = light.discover_services().await {
-                        eprintln!("Failed to discover services: {:?}", e);
-                        continue;
-                    }
-                    self.lights.push(light);
-                }
-            }
-        }
-    }
-
-    async fn delete_disconnected_lights(&mut self) {
-        let mut i = 0;
-        while i < self.lights.len() {
-            if !self.lights[i].is_connected().await.unwrap() {
-                println!("Removing light {:?}", self.lights[i].get_id().await);
-                self.lights.remove(i);
-            } else {
-                i += 1;
-            }
-        }
+    pub async fn find_light_loop(&self) {
+        // start scanning for devices
+        let futures: Vec<_> = self.lights.iter().map(|light| light.find_loop()).collect();
+        futures::future::join_all(futures).await;
     }
 
     pub async fn disconnect(&self) {
-        for light in &self.lights {
+        for light in self.lights.iter() {
             light.disconnect().await.unwrap();
         }
 
-        self.sacn_client.disconnect().await.unwrap();
+        self.sacn_client
+            .as_ref()
+            .unwrap()
+            .disconnect()
+            .await
+            .unwrap();
     }
 
-    pub async fn scan(&self) -> Result<(), btleplug::Error> {
-        for p in self.bt_adapter.peripherals().await? {
+    pub async fn scan(adapter: Adapter) -> Result<(), btleplug::Error> {
+        for p in adapter.peripherals().await? {
             let props = p.properties().await?;
             if let Some(properties) = props {
                 if properties.local_name.is_some() {

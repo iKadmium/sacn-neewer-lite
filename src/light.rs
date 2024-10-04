@@ -1,9 +1,10 @@
-use btleplug::api::{BDAddr, Central, Peripheral as _, WriteType};
-use btleplug::platform::{Adapter, Peripheral};
+use btleplug::api::{BDAddr, Central, Manager as _, Peripheral as _, WriteType};
+use btleplug::platform::{Manager, Peripheral};
 use lazy_static::lazy_static;
+use tokio::sync::RwLock;
 use uuid::Uuid;
 
-use crate::color;
+use crate::color::Color;
 
 const UUID_STR: &str = "69400002-B5A3-F393-E0A9-E50E24DCCA99";
 lazy_static! {
@@ -11,57 +12,55 @@ lazy_static! {
 }
 
 pub struct Light {
-    peripheral: Peripheral,
-    uuid: Uuid,
+    id: BDAddr,
     universe: u16,
     address: u16,
+    peripheral: RwLock<Option<Peripheral>>,
+    color: RwLock<Color>,
 }
 
 impl Light {
-    pub fn new(peripheral: Peripheral, universe: u16, address: u16) -> Self {
-        let uuid = Uuid::parse_str(UUID_STR).unwrap();
+    pub fn new(id: BDAddr, universe: u16, address: u16) -> Self {
         Self {
-            peripheral,
-            uuid,
+            id,
             universe,
             address,
+            peripheral: RwLock::new(None),
+            color: RwLock::new(Color::new(0, 0, 0)),
         }
     }
 
-    fn add_checksum(send_value: &[u8]) -> Vec<u8> {
-        let mut return_array = vec![];
+    fn get_checksum(send_value: &[u8]) -> u8 {
         let mut check_sum: u8 = 0;
 
         for value in send_value {
             check_sum = check_sum.wrapping_add(*value) as u8;
-            return_array.push(*value);
         }
 
-        return_array.push(check_sum);
-        return return_array;
+        return check_sum;
     }
 
-    pub async fn set_color_hsi(
-        &self,
-        hue: u16,
-        saturation: u8,
-        brightness: u8,
-    ) -> Result<(), btleplug::Error> {
+    async fn send_color(&self) -> Result<(), btleplug::Error> {
+        let color = self.color.read().await;
+        let (hue, saturation, brightness) = color.to_hsv();
+        drop(color);
+
         let hue_lsb = (hue & 0xFF) as u8;
         let hue_msb = ((hue >> 8) & 0xFF) as u8;
 
-        let color_cmd = vec![120, 134, 4, hue_lsb, hue_msb, saturation, brightness];
-        let send_value = Self::add_checksum(&color_cmd);
+        let mut color_cmd = vec![120, 134, 4, hue_lsb, hue_msb, saturation, brightness];
+        color_cmd.push(Light::get_checksum(&color_cmd));
 
-        println!("Sending {:?}", send_value);
+        let lock = self.peripheral.read().await;
+
+        let peripheral = lock.as_ref().unwrap();
+        let chars = peripheral.characteristics();
+        let cmd_char = chars.iter().find(|c| c.uuid == *write_uuid).unwrap();
 
         // find the characteristic we want
-        let chars = self.peripheral.characteristics();
-        let cmd_char = chars.iter().find(|c| c.uuid == self.uuid);
-        if let Some(cmd_char) = cmd_char {
-            return self
-                .peripheral
-                .write(cmd_char, &send_value, WriteType::WithoutResponse)
+        if lock.is_some() {
+            return peripheral
+                .write(cmd_char, &color_cmd, WriteType::WithoutResponse)
                 .await;
         } else {
             return Err(btleplug::Error::Other(Box::new(std::io::Error::new(
@@ -71,33 +70,44 @@ impl Light {
         }
     }
 
-    pub async fn set_color_rgb(&self, red: u8, green: u8, blue: u8) -> Result<(), btleplug::Error> {
-        let (hue, saturation, intensity) = color::rgb_to_hsv(red, green, blue);
-        return self.set_color_hsi(hue, saturation, intensity).await;
+    pub async fn set_color_rgb(&self, red: u8, green: u8, blue: u8) {
+        let mut lock = self.color.write().await;
+        lock.red = red;
+        lock.green = green;
+        lock.blue = blue;
     }
 
-    pub async fn connect(&self) -> Result<(), btleplug::Error> {
+    pub async fn connect(&self, peripheral: Peripheral) -> Result<(), btleplug::Error> {
         println!("Connecting to {:?}", self.get_name().await);
-        return self.peripheral.connect().await;
+        let mut lock = self.peripheral.write().await;
+        lock.replace(peripheral);
+
+        lock.as_ref().unwrap().connect().await?;
+        lock.as_ref().unwrap().discover_services().await?;
+        println!("Connected");
+        drop(lock);
+
+        return Ok(());
     }
 
     pub async fn disconnect(&self) -> Result<(), btleplug::Error> {
         println!("Disconnecting from {:?}", self.get_name().await);
-        return self.peripheral.disconnect().await;
-    }
-
-    pub async fn discover_services(&self) -> Result<(), btleplug::Error> {
-        return self.peripheral.discover_services().await;
+        let lock = self.peripheral.read().await;
+        if lock.as_ref().is_some() {
+            lock.as_ref().unwrap().disconnect().await?;
+        }
+        return Ok(());
     }
 
     pub async fn get_name(&self) -> Option<String> {
-        return self
-            .peripheral
-            .properties()
-            .await
-            .unwrap()
-            .unwrap()
-            .local_name;
+        let lock = self.peripheral.read().await;
+        match lock.as_ref() {
+            Some(p) => {
+                let props = p.properties().await.unwrap().unwrap();
+                return props.local_name;
+            }
+            None => return None,
+        }
     }
 
     pub fn get_address(&self) -> u16 {
@@ -109,58 +119,46 @@ impl Light {
     }
 
     pub async fn is_connected(&self) -> Result<bool, btleplug::Error> {
-        return self.peripheral.is_connected().await;
+        let lock = self.peripheral.read().await;
+        match lock.as_ref() {
+            Some(ref p) => return p.is_connected().await,
+            None => return Ok(false),
+        }
     }
 
-    // name is "NEEWER-TL21C"
-    pub async fn find_by_name(
-        central: &Adapter,
-        names: Vec<&str>,
-        universe: u16,
-        first_address: u16,
-    ) -> Vec<Light> {
-        let mut lights: Vec<Light> = vec![];
-        let mut address = first_address;
-        for p in central.peripherals().await.unwrap() {
-            let props = p.properties().await.unwrap().unwrap();
-            if p.properties()
-                .await
-                .unwrap()
-                .unwrap()
-                .local_name
-                .iter()
-                .any(|name| names.contains(&name.as_str()))
-            {
-                println!("Found device {:?}", props.local_name);
-                let light = Light::new(p, universe, address);
-                address += 3;
-                lights.push(light);
-            }
-        }
-        return lights;
-    }
+    pub async fn find_loop(&self) {
+        let manager = Manager::new().await.unwrap();
+        let adapters = manager.adapters().await.unwrap();
+        let central = adapters.into_iter().nth(0).unwrap();
 
-    pub async fn find_by_id(
-        central: &Adapter,
-        universe: u16,
-        dmx_address: u16,
-        bt_address: BDAddr,
-    ) -> Option<Light> {
-        let address = dmx_address;
-        println!("Looking for {:?}", bt_address);
-        for p in central.peripherals().await.unwrap() {
-            let props = p.properties().await.unwrap().unwrap();
+        println!("Looking for {:?}", self.id);
 
-            if p.properties().await.unwrap().unwrap().address == bt_address {
-                println!("Found device {:?}", props.local_name);
-                let light = Light::new(p, universe, address);
-                return Some(light);
+        loop {
+            let connected = self.is_connected().await.unwrap();
+            if !connected {
+                println!("Reconnecting");
+                for p in central.peripherals().await.unwrap() {
+                    let props_result = p.properties().await;
+
+                    if let Ok(Some(props)) = props_result {
+                        if props.address == self.id {
+                            println!("Found device {:?}", props.local_name);
+                            self.connect(p).await.unwrap();
+                        }
+                    } else {
+                        println!("Failed to get properties for peripheral");
+                    }
+                }
             }
+            let send_result = self.send_color().await;
+            if send_result.is_err() {
+                println!("Failed to send color: {:?}", send_result.err().unwrap());
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         }
-        return None;
     }
 
     pub async fn get_id(&self) -> BDAddr {
-        return self.peripheral.properties().await.unwrap().unwrap().address;
+        return self.id;
     }
 }

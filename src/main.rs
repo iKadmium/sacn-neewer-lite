@@ -8,21 +8,35 @@ pub mod tests;
 
 use std::env;
 use std::error::Error;
+use std::sync::Arc;
 
+use btleplug::api::{Central, Manager as _, ScanFilter};
+use btleplug::platform::Manager;
 use config::Config;
+use light_controller::LightController;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().collect();
 
+    let manager = Manager::new().await.unwrap();
+    let adapters = manager.adapters().await?;
+    let central = adapters.into_iter().nth(0).unwrap();
+
     if args.len() == 2 && args[1] == "scan" {
-        let controller = light_controller::LightController::new(vec![]).await;
-        controller.scan().await?;
+        LightController::scan(central).await.unwrap();
     } else {
+        central.start_scan(ScanFilter::default()).await.unwrap();
+
         let config = Config::from_file("data/config.json").await.unwrap();
-        let mut controller = light_controller::LightController::new(config.get_universes()).await;
-        controller.listen(config).await?;
-        controller.disconnect().await;
+        let controller = LightController::new(&config).await;
+
+        let controller_arc = Arc::new(tokio::sync::RwLock::new(controller));
+        let read_lock = controller_arc.read().await;
+
+        tokio::join!(read_lock.listen(), read_lock.find_light_loop());
+
+        // controller.disconnect().await;
     }
 
     Ok(())
