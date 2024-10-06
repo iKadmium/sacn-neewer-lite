@@ -2,6 +2,8 @@ use async_std::net::UdpSocket;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddrV4};
 
+use crate::sacn_packet::SacnDmxPacket;
+
 const SACN_PORT: u16 = 5568;
 
 pub struct SacnClient {
@@ -34,6 +36,18 @@ impl SacnClient {
                 .unwrap();
         }
         Ok(())
+    }
+
+    pub async fn receive(&self) -> Result<SacnDmxPacket, io::Error> {
+        let mut buf = [0; 1024];
+        loop {
+            let amt = self.socket.recv(&mut buf).await?;
+            let packet = &buf[..amt];
+            if SacnDmxPacket::is_data_packet(packet) {
+                let sacn_packet = SacnDmxPacket::from_bytes(packet.to_vec()).unwrap();
+                return Ok(sacn_packet);
+            }
+        }
     }
 
     pub fn get_socket(&self) -> &UdpSocket {

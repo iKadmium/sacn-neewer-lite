@@ -34,7 +34,7 @@ impl Light {
         let mut check_sum: u8 = 0;
 
         for value in send_value {
-            check_sum = check_sum.wrapping_add(*value) as u8;
+            check_sum = check_sum.wrapping_add(*value);
         }
 
         return check_sum;
@@ -78,7 +78,7 @@ impl Light {
     }
 
     pub async fn connect(&self, peripheral: Peripheral) -> Result<(), btleplug::Error> {
-        println!("Connecting to {:?}", self.get_name().await);
+        println!("Connecting to {:?}", self.id);
         let mut lock = self.peripheral.write().await;
         lock.replace(peripheral);
 
@@ -142,7 +142,9 @@ impl Light {
                     if let Ok(Some(props)) = props_result {
                         if props.address == self.id {
                             println!("Found device {:?}", props.local_name);
-                            self.connect(p).await.unwrap();
+                            if let Err(e) = self.connect(p).await {
+                                println!("Failed to connect to peripheral: {:?}", e);
+                            }
                         }
                     } else {
                         println!("Failed to get properties for peripheral");

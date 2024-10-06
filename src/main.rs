@@ -34,9 +34,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let controller_arc = Arc::new(tokio::sync::RwLock::new(controller));
         let read_lock = controller_arc.read().await;
 
-        tokio::join!(read_lock.listen(), read_lock.find_light_loop());
+        tokio::select! {
+            _ = read_lock.listen() => {},
+            _ = read_lock.find_light_loop() => {},
+            _ = tokio::signal::ctrl_c() => {
+                println!("Received Ctrl-C");
+            }
+        };
 
-        // controller.disconnect().await;
+        println!("Exiting");
+
+        controller_arc.read().await.disconnect().await;
     }
 
     Ok(())

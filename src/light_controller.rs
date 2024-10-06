@@ -4,7 +4,7 @@ use btleplug::{
     api::{Central, Peripheral as _},
     platform::Adapter,
 };
-use tokio::{signal, time};
+use tokio::time;
 
 use crate::{config::Config, light::Light, sacn_client::SacnClient, sacn_packet::SacnDmxPacket};
 
@@ -41,26 +41,13 @@ impl LightController {
     }
 
     pub async fn listen(&self) {
-        let mut buf = [0; 1024];
-
-        let socket = self.sacn_client.as_ref().unwrap().get_socket();
-
         loop {
-            let sigterm_future = signal::ctrl_c();
-
             let _result = tokio::select! {
-                _sigterm = sigterm_future => {
-                    println!("Received SIGTERM, shutting down...");
-                    break;
-                }
-                amt = socket.recv(&mut buf) => {
+                packet = self.sacn_client.as_ref().unwrap().receive() => {
                     println!("Received data");
-                    let packet = &buf[..amt.unwrap()];
-                    if SacnDmxPacket::is_data_packet(packet) {
-                        let sacn_packet = SacnDmxPacket::from_bytes(packet.to_vec()).unwrap();
-                        if let Err(e) = self.handle_packet(&sacn_packet).await {
-                            eprintln!("Error handling packet: {:?}", e);
-                        }
+
+                    if let Err(e) = self.handle_packet(&packet.unwrap()).await {
+                        eprintln!("Error handling packet: {:?}", e);
                     }
                 }
                 _timeout = time::sleep(Duration::from_secs(1)) => {
