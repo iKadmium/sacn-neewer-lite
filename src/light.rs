@@ -175,6 +175,7 @@ impl Light {
                     ratatui::style::Color::Yellow,
                 );
             }
+
             while !self.is_connected().await.unwrap() {
                 for p in central.peripherals().await.unwrap() {
                     let props_result = p.properties().await;
@@ -194,9 +195,8 @@ impl Light {
                 }
                 tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
             }
-            let send_result = self.send_color().await;
-            if send_result.is_err() {
-                self.set_error_status(terminal, "Failed to send color", send_result.err().unwrap())
+            if let Err(e) = self.send_color().await {
+                self.set_error_status(terminal, "Failed to send color", e)
                     .await;
             }
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
