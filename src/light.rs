@@ -1,7 +1,7 @@
 use std::error::Error;
 
 use btleplug::api::{BDAddr, Central, Manager as _, Peripheral as _, WriteType};
-use btleplug::platform::{Manager, Peripheral};
+use btleplug::platform::{Adapter, Manager, Peripheral};
 use lazy_static::lazy_static;
 use tokio::sync::RwLock;
 use uuid::Uuid;
@@ -43,7 +43,7 @@ impl Light {
         return check_sum;
     }
 
-    async fn send_color(&self) -> Result<(), btleplug::Error> {
+    async fn send_color(&self) -> Result<(), impl Error> {
         let color = self.color.read().await;
         let (hue, saturation, brightness) = color.to_hsv();
         drop(color);
@@ -61,6 +61,7 @@ impl Light {
             let peripheral = lock.as_ref().unwrap();
             let chars = peripheral.characteristics();
             let maybe_cmd_char = chars.iter().find(|c| c.uuid == *write_uuid);
+
             match maybe_cmd_char {
                 Some(cmd_char) => {
                     return peripheral
@@ -68,17 +69,11 @@ impl Light {
                         .await
                 }
                 None => {
-                    return Err(btleplug::Error::Other(Box::new(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        "Could not find characteristic",
-                    ))));
+                    return Err(btleplug::Error::NoSuchCharacteristic);
                 }
             }
         } else {
-            return Err(btleplug::Error::Other(Box::new(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Could not find characteristic",
-            ))));
+            return Err(btleplug::Error::NoSuchCharacteristic);
         }
     }
 
@@ -168,38 +163,43 @@ impl Light {
         let central = adapters.into_iter().nth(0).unwrap();
 
         loop {
-            if !self.is_connected().await.unwrap() {
-                terminal.write().await.set_light_status(
-                    self.id.to_string().as_str(),
-                    "Searching",
-                    ratatui::style::Color::Yellow,
-                );
-            }
+            self.search(&central, terminal).await;
 
-            while !self.is_connected().await.unwrap() {
-                for p in central.peripherals().await.unwrap() {
-                    let props_result = p.properties().await;
-
-                    if let Ok(Some(props)) = props_result {
-                        if props.address == self.id {
-                            self.connect(p, terminal).await;
-                        }
-                    } else {
-                        self.set_error_status(
-                            terminal,
-                            "Failed to get properties",
-                            props_result.err().unwrap(),
-                        )
-                        .await;
-                    }
-                }
-                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-            }
             if let Err(e) = self.send_color().await {
                 self.set_error_status(terminal, "Failed to send color", e)
                     .await;
             }
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        }
+    }
+
+    async fn search(&self, central: &Adapter, terminal: &RwLock<TerminalUi>) {
+        if !self.is_connected().await.unwrap() {
+            terminal.write().await.set_light_status(
+                self.id.to_string().as_str(),
+                "Searching",
+                ratatui::style::Color::Yellow,
+            );
+        }
+
+        while !self.is_connected().await.unwrap() {
+            for p in central.peripherals().await.unwrap() {
+                let props_result = p.properties().await;
+
+                if let Ok(Some(props)) = props_result {
+                    if props.address == self.id {
+                        self.connect(p, terminal).await;
+                    }
+                } else {
+                    self.set_error_status(
+                        terminal,
+                        "Failed to get properties",
+                        props_result.err().unwrap(),
+                    )
+                    .await;
+                }
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
         }
     }
 
