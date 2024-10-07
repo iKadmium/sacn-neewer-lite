@@ -1,5 +1,6 @@
 pub mod color;
 pub mod config;
+pub mod dirty_details;
 pub mod light;
 pub mod light_controller;
 pub mod sacn_client;
@@ -56,14 +57,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
             _ = TerminalUi::ui_loop(&terminal_mutex) => {},
         };
 
-        terminal_mutex
-            .write()
-            .await
-            .set_app_status("Exiting", ratatui::style::Color::Reset);
-
         controller_read_lock.disconnect(&terminal_mutex).await;
+
         let mut terminal_lock = terminal_mutex.write().await;
-        let _result = terminal_lock.restore_terminal();
+        let _result = terminal_lock.restore_terminal().await;
+
+        println!("Exiting");
     }
 
     Ok(())

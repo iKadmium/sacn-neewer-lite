@@ -7,6 +7,7 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::color::Color;
+use crate::dirty_details::DirtyDetails;
 use crate::terminal_ui::TerminalUi;
 
 const UUID_STR: &str = "69400002-B5A3-F393-E0A9-E50E24DCCA99";
@@ -20,6 +21,7 @@ pub struct Light {
     address: u16,
     peripheral: RwLock<Option<Peripheral>>,
     color: RwLock<Color>,
+    dirty_details: RwLock<DirtyDetails>,
 }
 
 impl Light {
@@ -30,6 +32,7 @@ impl Light {
             address,
             peripheral: RwLock::new(None),
             color: RwLock::new(Color::new(0, 0, 0)),
+            dirty_details: RwLock::new(DirtyDetails::new()),
         }
     }
 
@@ -64,9 +67,18 @@ impl Light {
 
             match maybe_cmd_char {
                 Some(cmd_char) => {
-                    return peripheral
-                        .write(cmd_char, &color_cmd, WriteType::WithoutResponse)
-                        .await
+                    let details_read_lock = self.dirty_details.read().await;
+                    if details_read_lock.is_dirty() {
+                        drop(details_read_lock);
+                        let send_result = peripheral
+                            .write(cmd_char, &color_cmd, WriteType::WithoutResponse)
+                            .await;
+                        let mut details_write_lock = self.dirty_details.write().await;
+                        details_write_lock.clean();
+                        return send_result;
+                    } else {
+                        return Ok(());
+                    }
                 }
                 None => {
                     return Err(btleplug::Error::NoSuchCharacteristic);
@@ -78,10 +90,17 @@ impl Light {
     }
 
     pub async fn set_color_rgb(&self, red: u8, green: u8, blue: u8) {
+        let read_lock = self.color.read().await;
+        if read_lock.red == red && read_lock.green == green && read_lock.blue == blue {
+            return;
+        }
+        drop(read_lock);
+
         let mut lock = self.color.write().await;
         lock.red = red;
         lock.green = green;
         lock.blue = blue;
+        self.dirty_details.write().await.dirty();
     }
 
     pub async fn connect(&self, peripheral: Peripheral, terminal: &RwLock<TerminalUi>) {

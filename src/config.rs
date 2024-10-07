@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use btleplug::api::BDAddr;
 use serde::de::{self, Deserializer};
 use serde::Deserialize;
@@ -22,7 +24,11 @@ impl Config {
     }
 
     pub fn get_universes(&self) -> Vec<u16> {
-        self.lights.iter().map(|light| light.universe).collect()
+        let mut universes = HashSet::new();
+        for light in &self.lights {
+            universes.insert(light.universe);
+        }
+        universes.into_iter().collect()
     }
 }
 impl<'de> Deserialize<'de> for LightConfig {
