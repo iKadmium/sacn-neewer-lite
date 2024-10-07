@@ -1,8 +1,11 @@
 use async_std::net::UdpSocket;
+use ratatui::style::Color;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddrV4};
+use tokio::sync::RwLock;
 
 use crate::sacn_packet::SacnDmxPacket;
+use crate::terminal_ui::TerminalUi;
 
 const SACN_PORT: u16 = 5568;
 
@@ -24,8 +27,11 @@ impl SacnClient {
         Ok(SacnClient { socket, universes })
     }
 
-    pub async fn disconnect(&self) -> Result<(), btleplug::Error> {
-        println!("Disconnecting from lights");
+    pub async fn disconnect(&self, terminal: &RwLock<TerminalUi>) -> Result<(), btleplug::Error> {
+        terminal
+            .write()
+            .await
+            .set_sacn_status("Disconnected", Color::Red);
 
         for universe in &self.universes {
             self.socket

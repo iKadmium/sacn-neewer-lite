@@ -1,3 +1,5 @@
+use std::error::Error;
+
 use btleplug::api::{BDAddr, Central, Manager as _, Peripheral as _, WriteType};
 use btleplug::platform::{Manager, Peripheral};
 use lazy_static::lazy_static;
@@ -5,6 +7,7 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::color::Color;
+use crate::terminal_ui::TerminalUi;
 
 const UUID_STR: &str = "69400002-B5A3-F393-E0A9-E50E24DCCA99";
 lazy_static! {
@@ -57,11 +60,20 @@ impl Light {
         if lock.is_some() {
             let peripheral = lock.as_ref().unwrap();
             let chars = peripheral.characteristics();
-            let cmd_char = chars.iter().find(|c| c.uuid == *write_uuid).unwrap();
-
-            return peripheral
-                .write(cmd_char, &color_cmd, WriteType::WithoutResponse)
-                .await;
+            let maybe_cmd_char = chars.iter().find(|c| c.uuid == *write_uuid);
+            match maybe_cmd_char {
+                Some(cmd_char) => {
+                    return peripheral
+                        .write(cmd_char, &color_cmd, WriteType::WithoutResponse)
+                        .await
+                }
+                None => {
+                    return Err(btleplug::Error::Other(Box::new(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        "Could not find characteristic",
+                    ))));
+                }
+            }
         } else {
             return Err(btleplug::Error::Other(Box::new(std::io::Error::new(
                 std::io::ErrorKind::Other,
@@ -77,21 +89,45 @@ impl Light {
         lock.blue = blue;
     }
 
-    pub async fn connect(&self, peripheral: Peripheral) -> Result<(), btleplug::Error> {
-        println!("Connecting to {:?}", self.id);
-        let mut lock = self.peripheral.write().await;
-        lock.replace(peripheral);
+    pub async fn connect(&self, peripheral: Peripheral, terminal: &RwLock<TerminalUi>) {
+        terminal.write().await.set_light_status(
+            self.id.to_string().as_str(),
+            "Connecting",
+            ratatui::style::Color::Yellow,
+        );
 
-        lock.as_ref().unwrap().connect().await?;
-        lock.as_ref().unwrap().discover_services().await?;
-        println!("Connected");
-        drop(lock);
+        let mut peripheral_lock = self.peripheral.write().await;
+        peripheral_lock.replace(peripheral);
 
-        return Ok(());
+        if let Err(e) = peripheral_lock.as_ref().unwrap().connect().await {
+            peripheral_lock.take();
+            self.set_error_status(terminal, "Failed to connect", e)
+                .await;
+            return;
+        }
+        if let Err(e) = peripheral_lock.as_ref().unwrap().discover_services().await {
+            peripheral_lock.take();
+            self.set_error_status(terminal, "Failed to discover services", e)
+                .await;
+            return;
+        }
+
+        drop(peripheral_lock);
+
+        terminal.write().await.set_light_status(
+            self.id.to_string().as_str(),
+            "Connected",
+            ratatui::style::Color::Green,
+        );
     }
 
-    pub async fn disconnect(&self) -> Result<(), btleplug::Error> {
-        println!("Disconnecting from {:?}", self.get_name().await);
+    pub async fn disconnect(&self, terminal: &RwLock<TerminalUi>) -> Result<(), btleplug::Error> {
+        terminal.write().await.set_light_status(
+            self.id.to_string().as_str(),
+            "Disconnected",
+            ratatui::style::Color::Red,
+        );
+
         let lock = self.peripheral.read().await;
         if lock.as_ref().is_some() {
             lock.as_ref().unwrap().disconnect().await?;
@@ -126,14 +162,18 @@ impl Light {
         }
     }
 
-    pub async fn find_loop(&self) {
+    pub async fn find_loop(&self, terminal: &RwLock<TerminalUi>) {
         let manager = Manager::new().await.unwrap();
         let adapters = manager.adapters().await.unwrap();
         let central = adapters.into_iter().nth(0).unwrap();
 
         loop {
             if !self.is_connected().await.unwrap() {
-                println!("Looking for {:?}", self.id);
+                terminal.write().await.set_light_status(
+                    self.id.to_string().as_str(),
+                    "Searching",
+                    ratatui::style::Color::Yellow,
+                );
             }
             while !self.is_connected().await.unwrap() {
                 for p in central.peripherals().await.unwrap() {
@@ -141,23 +181,40 @@ impl Light {
 
                     if let Ok(Some(props)) = props_result {
                         if props.address == self.id {
-                            println!("Found device {:?}", props.local_name);
-                            if let Err(e) = self.connect(p).await {
-                                println!("Failed to connect to peripheral: {:?}", e);
-                            }
+                            self.connect(p, terminal).await;
                         }
                     } else {
-                        println!("Failed to get properties for peripheral");
+                        self.set_error_status(
+                            terminal,
+                            "Failed to get properties",
+                            props_result.err().unwrap(),
+                        )
+                        .await;
                     }
                 }
                 tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
             }
             let send_result = self.send_color().await;
             if send_result.is_err() {
-                println!("Failed to send color: {:?}", send_result.err().unwrap());
+                self.set_error_status(terminal, "Failed to send color", send_result.err().unwrap())
+                    .await;
             }
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         }
+    }
+
+    async fn set_error_status(
+        &self,
+        terminal: &RwLock<TerminalUi>,
+        status: &str,
+        error: impl Error,
+    ) {
+        let err = format!("{}: {:?}", status, error);
+        terminal.write().await.set_light_status(
+            self.id.to_string().as_str(),
+            err.as_str(),
+            ratatui::style::Color::Red,
+        );
     }
 
     pub async fn get_id(&self) -> BDAddr {

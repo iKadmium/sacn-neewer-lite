@@ -4,9 +4,13 @@ use btleplug::{
     api::{Central, Peripheral as _},
     platform::Adapter,
 };
-use tokio::time;
+use ratatui::style::Color;
+use tokio::{sync::RwLock, time};
 
-use crate::{config::Config, light::Light, sacn_client::SacnClient, sacn_packet::SacnDmxPacket};
+use crate::{
+    config::Config, light::Light, sacn_client::SacnClient, sacn_packet::SacnDmxPacket,
+    terminal_ui::TerminalUi,
+};
 
 pub struct LightController {
     sacn_client: Option<SacnClient>,
@@ -40,38 +44,46 @@ impl LightController {
         Ok(())
     }
 
-    pub async fn listen(&self) {
+    pub async fn listen(&self, terminal: &RwLock<TerminalUi>) {
         loop {
             let _result = tokio::select! {
                 packet = self.sacn_client.as_ref().unwrap().receive() => {
-                    println!("Received data");
+                    let mut lock = terminal.write().await;
+                    lock.set_sacn_status("Received Sacn Packet", Color::Green);
+                    drop(lock);
 
                     if let Err(e) = self.handle_packet(&packet.unwrap()).await {
                         eprintln!("Error handling packet: {:?}", e);
                     }
                 }
                 _timeout = time::sleep(Duration::from_secs(1)) => {
-                    println!("Timeout");
+                    let mut lock = terminal.write().await;
+                    lock.set_sacn_status("Timeout", Color::Red);
+                    drop(lock);
                 }
             };
         }
     }
 
-    pub async fn find_light_loop(&self) {
+    pub async fn find_light_loop(&self, terminal: &RwLock<TerminalUi>) {
         // start scanning for devices
-        let futures: Vec<_> = self.lights.iter().map(|light| light.find_loop()).collect();
+        let futures: Vec<_> = self
+            .lights
+            .iter()
+            .map(|light| light.find_loop(terminal))
+            .collect();
         futures::future::join_all(futures).await;
     }
 
-    pub async fn disconnect(&self) {
+    pub async fn disconnect(&self, terminal: &RwLock<TerminalUi>) {
         for light in self.lights.iter() {
-            light.disconnect().await.unwrap();
+            light.disconnect(terminal).await.unwrap();
         }
 
         self.sacn_client
             .as_ref()
             .unwrap()
-            .disconnect()
+            .disconnect(terminal)
             .await
             .unwrap();
     }
