@@ -50,6 +50,7 @@ impl LightController {
                 packet = self.sacn_client.as_ref().unwrap().receive() => {
                     let mut lock = terminal.write().await;
                     lock.set_sacn_status("Received Sacn Packet", Color::Green);
+                    lock.add_sacn_event();
                     drop(lock);
 
                     if let Err(e) = self.handle_packet(&packet.unwrap()).await {

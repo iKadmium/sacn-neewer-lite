@@ -1,10 +1,12 @@
 pub mod color;
 pub mod config;
 pub mod dirty_details;
+pub mod event_counter;
 pub mod light;
 pub mod light_controller;
 pub mod sacn_client;
 pub mod sacn_packet;
+pub mod terminal_status;
 pub mod terminal_ui;
 pub mod tests;
 

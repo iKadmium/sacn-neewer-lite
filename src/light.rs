@@ -46,7 +46,7 @@ impl Light {
         return check_sum;
     }
 
-    async fn send_color(&self) -> Result<(), impl Error> {
+    async fn send_color(&self) -> Result<bool, impl Error> {
         let color = self.color.read().await;
         let (hue, saturation, brightness) = color.to_hsv();
         drop(color);
@@ -75,9 +75,16 @@ impl Light {
                             .await;
                         let mut details_write_lock = self.dirty_details.write().await;
                         details_write_lock.clean();
-                        return send_result;
+                        match send_result {
+                            Ok(_) => {
+                                return Ok(true);
+                            }
+                            Err(e) => {
+                                return Err(e);
+                            }
+                        }
                     } else {
-                        return Ok(());
+                        return Ok(false);
                     }
                 }
                 None => {
@@ -184,9 +191,19 @@ impl Light {
         loop {
             self.search(&central, terminal).await;
 
-            if let Err(e) = self.send_color().await {
-                self.set_error_status(terminal, "Failed to send color", e)
-                    .await;
+            match self.send_color().await {
+                Ok(sent) => {
+                    if sent {
+                        terminal
+                            .write()
+                            .await
+                            .add_light_event(self.id.to_string().as_str());
+                    }
+                }
+                Err(e) => {
+                    self.set_error_status(terminal, "Failed to send color", e)
+                        .await;
+                }
             }
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         }

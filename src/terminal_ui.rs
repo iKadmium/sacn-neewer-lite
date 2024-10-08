@@ -20,10 +20,12 @@ use ratatui::{
 };
 use tokio::sync::RwLock;
 
+use crate::terminal_status::TerminalStatus;
+
 pub struct TerminalUi {
-    sacn_status: (String, Color),
-    light_status: HashMap<String, (String, Color)>,
-    app_status: (String, Color),
+    sacn_status: TerminalStatus,
+    light_status: HashMap<String, TerminalStatus>,
+    app_status: TerminalStatus,
     terminal: RwLock<Terminal<CrosstermBackend<Stdout>>>,
 }
 
@@ -31,9 +33,9 @@ impl TerminalUi {
     pub fn new() -> Self {
         let terminal = Self::setup_terminal().unwrap();
         Self {
-            sacn_status: (String::new(), Color::Reset),
+            sacn_status: TerminalStatus::new(),
             light_status: HashMap::new(),
-            app_status: (String::new(), Color::Reset),
+            app_status: TerminalStatus::new(),
             terminal: RwLock::new(terminal),
         }
     }
@@ -53,21 +55,43 @@ impl TerminalUi {
     }
 
     pub fn set_sacn_status(&mut self, status: &str, color: Color) {
-        self.sacn_status = (status.to_string(), color);
+        self.sacn_status.color = color;
+        self.sacn_status.status = status.to_string();
+    }
+
+    pub fn add_sacn_event(&mut self) {
+        self.sacn_status.event_counter.increment();
     }
 
     pub fn set_light_status(&mut self, id: &str, status: &str, color: Color) {
-        self.light_status
-            .insert(id.to_string(), (status.to_string(), color));
+        let status_obj = self
+            .light_status
+            .entry(id.to_string())
+            .or_insert(TerminalStatus::new());
+
+        status_obj.color = color;
+        status_obj.status = status.to_string();
+    }
+
+    pub fn add_light_event(&mut self, id: &str) {
+        let status_obj = self
+            .light_status
+            .entry(id.to_string())
+            .or_insert(TerminalStatus::new());
+
+        status_obj.event_counter.increment();
     }
 
     pub fn set_app_status(&mut self, status: &str, color: Color) {
-        self.app_status = (status.to_string(), color);
+        self.app_status.color = color;
+        self.app_status.status = status.to_string();
     }
 
     pub async fn ui_loop(lock: &RwLock<Self>) {
         let mut should_exit = false;
         while !should_exit {
+            lock.write().await.update_sparklines();
+
             let self_ref = lock.read().await;
             let mut terminal_ref = self_ref.terminal.write().await;
 
@@ -91,6 +115,23 @@ impl TerminalUi {
         Ok(false)
     }
 
+    fn update_sparklines(&mut self) {
+        // Check and clear statuses if needed
+        if self.app_status.event_counter.should_clear() {
+            self.app_status.event_counter.clear();
+        }
+
+        if self.sacn_status.event_counter.should_clear() {
+            self.sacn_status.event_counter.clear();
+        }
+
+        for status in self.light_status.values_mut() {
+            if status.event_counter.should_clear() {
+                status.event_counter.clear();
+            }
+        }
+    }
+
     fn ui(&self, frame: &mut Frame) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -98,8 +139,8 @@ impl TerminalUi {
             .constraints(
                 [
                     Constraint::Length(3),
-                    Constraint::Length(3),
-                    Constraint::Min((self.light_status.len() + 2) as u16),
+                    Constraint::Length(5),
+                    Constraint::Min((self.light_status.len() * 2 + 2) as u16),
                 ]
                 .as_ref(),
             )
@@ -108,55 +149,65 @@ impl TerminalUi {
         let app_status_block = Block::default()
             .title("App Status")
             .borders(ratatui::widgets::Borders::ALL);
-        let app_status_paragraph = Paragraph::new(self.app_status.0.as_str())
-            .style(self.app_status.1)
+        let app_status_paragraph = Paragraph::new(self.app_status.status.as_str())
+            .style(self.app_status.color)
             .block(app_status_block);
         frame.render_widget(app_status_paragraph, chunks[0]);
 
         let sacn_status_block = Block::default()
-            .title("Sacn Status")
+            .title("Sacn")
             .borders(ratatui::widgets::Borders::ALL);
-        let sacn_status_paragraph = Paragraph::new(self.sacn_status.0.as_str())
-            .style(self.sacn_status.1)
+        let sacn_status_paragraph = Paragraph::new(self.sacn_status.status.as_str())
+            .style(self.sacn_status.color)
             .block(sacn_status_block);
         frame.render_widget(sacn_status_paragraph, chunks[1]);
 
-        let light_status_block = Block::default()
-            .title("Light Status")
-            .borders(ratatui::widgets::Borders::ALL);
-        let light_status_paragraphs: Vec<Paragraph> = self
-            .light_status
-            .iter()
-            .map(|(id, status)| Paragraph::new(format!("{}: {}", id, status.0)).style(status.1))
-            .collect();
+        // Adding sparkline for sacn status
+        let sacn_sparkline = ratatui::widgets::Sparkline::default()
+            .data(&self.sacn_status.event_counter.get_history().as_slices().0)
+            .style(self.sacn_status.color);
+        frame.render_widget(
+            sacn_sparkline,
+            chunks[1].inner(ratatui::layout::Margin {
+                vertical: 2,
+                horizontal: 1,
+            }),
+        );
 
+        let light_status_block = Block::default()
+            .title("Lights")
+            .borders(ratatui::widgets::Borders::ALL);
         let light_status_inner_area = light_status_block.inner(chunks[2]);
         let light_status_layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints(
-                light_status_paragraphs
-                    .iter()
-                    .map(|_| Constraint::Length(1))
+                (0..self.light_status.len() * 2)
+                    .map(|i| {
+                        if i % 2 == 0 {
+                            Constraint::Length(1)
+                        } else {
+                            Constraint::Length(1)
+                        }
+                    })
                     .collect::<Vec<_>>(),
             )
             .split(light_status_inner_area);
 
-        if let Some(first_light) = self.light_status.values().next() {
-            if self
-                .light_status
-                .values()
-                .all(|status| status.1 == first_light.1)
-            {
-                frame.render_widget(light_status_block.style(first_light.1), chunks[2]);
-            } else {
-                frame.render_widget(light_status_block, chunks[2]);
-            }
-        } else {
-            frame.render_widget(light_status_block, chunks[2]);
-        }
+        frame.render_widget(light_status_block, chunks[2]);
 
-        for (i, paragraph) in light_status_paragraphs.into_iter().enumerate() {
-            frame.render_widget(paragraph, light_status_layout[i]);
+        for (i, (_id, status)) in self.light_status.iter().enumerate() {
+            let paragraph_index = i * 2;
+            let sparkline_index = paragraph_index + 1;
+
+            let paragraph =
+                Paragraph::new(format!("{}: {}", _id, status.status)).style(status.color);
+            frame.render_widget(paragraph, light_status_layout[paragraph_index]);
+
+            // Adding sparkline for each light status
+            let sparkline = ratatui::widgets::Sparkline::default()
+                .data(status.event_counter.get_history().as_slices().0)
+                .style(status.color);
+            frame.render_widget(sparkline, light_status_layout[sparkline_index]);
         }
     }
 }
