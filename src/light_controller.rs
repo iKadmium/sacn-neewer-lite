@@ -1,11 +1,11 @@
-use std::time::Duration;
+use core::time;
 
 use btleplug::{
     api::{Central, Peripheral as _},
     platform::Adapter,
 };
 use ratatui::style::Color;
-use tokio::{sync::RwLock, time};
+use tokio::{sync::RwLock, time::Instant};
 
 use crate::{
     config::Config, light::Light, sacn_client::SacnClient, sacn_packet::SacnDmxPacket,
@@ -32,37 +32,38 @@ impl LightController {
         }
     }
 
-    async fn handle_packet(&self, packet: &SacnDmxPacket) -> Result<(), btleplug::Error> {
+    async fn handle_packet(
+        &self,
+        packet: &SacnDmxPacket,
+        terminal: &RwLock<TerminalUi>,
+    ) -> Result<(), btleplug::Error> {
         for light in self.lights.iter() {
             if light.get_universe() == packet.universe {
                 let red = packet.dmx_data[light.get_address() as usize];
                 let green = packet.dmx_data[light.get_address() as usize + 1];
                 let blue = packet.dmx_data[light.get_address() as usize + 2];
                 light.set_color_rgb(red, green, blue).await;
+                terminal
+                    .write()
+                    .await
+                    .set_light_color(&light.get_id().to_string(), Color::Rgb(red, green, blue));
             }
         }
         Ok(())
     }
 
     pub async fn listen(&self, terminal: &RwLock<TerminalUi>) {
+        terminal
+            .write()
+            .await
+            .set_sacn_status("Listening", ratatui::style::Color::Green);
         loop {
-            let _result = tokio::select! {
-                packet = self.sacn_client.as_ref().unwrap().receive() => {
-                    let mut lock = terminal.write().await;
-                    lock.set_sacn_status("Received Sacn Packet", Color::Green);
-                    lock.add_sacn_event();
-                    drop(lock);
+            let packet = self.sacn_client.as_ref().unwrap().receive().await;
+            terminal.write().await.add_sacn_event();
 
-                    if let Err(e) = self.handle_packet(&packet.unwrap()).await {
-                        eprintln!("Error handling packet: {:?}", e);
-                    }
-                }
-                _timeout = time::sleep(Duration::from_secs(1)) => {
-                    let mut lock = terminal.write().await;
-                    lock.set_sacn_status("Timeout", Color::Red);
-                    drop(lock);
-                }
-            };
+            if let Err(e) = self.handle_packet(&packet.unwrap(), terminal).await {
+                eprintln!("Error handling packet: {:?}", e);
+            }
         }
     }
 

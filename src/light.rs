@@ -47,9 +47,7 @@ impl Light {
     }
 
     async fn send_color(&self) -> Result<bool, impl Error> {
-        let color = self.color.read().await;
-        let (hue, saturation, brightness) = color.to_hsv();
-        drop(color);
+        let (hue, saturation, brightness) = self.color.read().await.to_hsv();
 
         let hue_lsb = (hue & 0xFF) as u8;
         let hue_msb = ((hue >> 8) & 0xFF) as u8;
@@ -67,14 +65,13 @@ impl Light {
 
             match maybe_cmd_char {
                 Some(cmd_char) => {
-                    let details_read_lock = self.dirty_details.read().await;
-                    if details_read_lock.is_dirty() {
-                        drop(details_read_lock);
+                    let dirty = self.dirty_details.read().await.is_dirty();
+                    if dirty {
                         let send_result = peripheral
                             .write(cmd_char, &color_cmd, WriteType::WithoutResponse)
                             .await;
-                        let mut details_write_lock = self.dirty_details.write().await;
-                        details_write_lock.clean();
+
+                        self.dirty_details.write().await.clean();
                         match send_result {
                             Ok(_) => {
                                 return Ok(true);
@@ -253,7 +250,7 @@ impl Light {
         );
     }
 
-    pub async fn get_id(&self) -> BDAddr {
+    pub fn get_id(&self) -> BDAddr {
         return self.id;
     }
 }

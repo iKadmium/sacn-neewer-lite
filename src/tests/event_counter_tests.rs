@@ -66,4 +66,41 @@ mod tests {
         counter.clear();
         assert!(!counter.should_clear());
     }
+
+    #[test]
+    fn test_clear_history() {
+        let interval = Duration::from_secs(1);
+        let max_history_size = 3;
+        let mut counter = EventCounter::new(interval, max_history_size);
+        for _ in 0..6 {
+            counter.increment();
+        }
+        counter.clear();
+
+        assert_eq!(counter.get_history().len(), 1);
+        assert_eq!(counter.get_last_history(), 6);
+        assert_eq!(counter.get_as_vec(), vec![6]);
+    }
+
+    #[test]
+    fn test_clear_history_overflow() {
+        let interval = Duration::from_secs(1);
+        let max_history_size = 3;
+        let expected_history = vec![3, 4, 5];
+
+        let mut counter = EventCounter::new(interval, max_history_size);
+        for i in 0..max_history_size * 2 {
+            for _ in 0..i {
+                counter.increment();
+            }
+            counter.clear();
+        }
+
+        assert_eq!(counter.get_history().len(), expected_history.len());
+        assert_eq!(
+            counter.get_last_history(),
+            *expected_history.last().unwrap()
+        );
+        assert_eq!(counter.get_as_vec(), expected_history);
+    }
 }

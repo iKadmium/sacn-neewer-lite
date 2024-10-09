@@ -48,4 +48,16 @@ impl EventCounter {
     pub fn get_history(&self) -> &VecDeque<u64> {
         &self.history
     }
+
+    pub fn get_last_history(&self) -> u64 {
+        let last = self.history.back().cloned();
+        match last {
+            Some(x) => x,
+            None => 0,
+        }
+    }
+
+    pub fn get_as_vec(&self) -> Vec<u64> {
+        return Vec::from(self.history.clone());
+    }
 }
