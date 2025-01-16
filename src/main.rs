@@ -56,7 +56,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         tokio::select! {
             _ = controller_read_lock.listen(&terminal_mutex) => {},
             _ = controller_read_lock.find_light_loop(&terminal_mutex) => {},
-            _ = TerminalUi::ui_loop(&terminal_mutex) => {},
+            //_ = TerminalUi::ui_loop(&terminal_mutex) => {},
         };
 
         controller_read_lock.disconnect(&terminal_mutex).await;

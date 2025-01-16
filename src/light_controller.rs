@@ -1,11 +1,9 @@
-use core::time;
-
 use btleplug::{
     api::{Central, Peripheral as _},
     platform::Adapter,
 };
 use ratatui::style::Color;
-use tokio::{sync::RwLock, time::Instant};
+use tokio::sync::RwLock;
 
 use crate::{
     config::Config, light::Light, sacn_client::SacnClient, sacn_packet::SacnDmxPacket,

@@ -1,3 +1,4 @@
+#[derive(Clone, PartialEq, Eq)]
 pub struct Color {
     pub red: u8,
     pub green: u8,

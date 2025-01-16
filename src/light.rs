@@ -1,6 +1,7 @@
 use std::error::Error;
+use std::sync::Mutex;
 
-use btleplug::api::{BDAddr, Central, Manager as _, Peripheral as _, WriteType};
+use btleplug::api::{BDAddr, Central, Characteristic, Manager as _, Peripheral as _, WriteType};
 use btleplug::platform::{Adapter, Manager, Peripheral};
 use lazy_static::lazy_static;
 use tokio::sync::RwLock;
@@ -20,8 +21,9 @@ pub struct Light {
     universe: u16,
     address: u16,
     peripheral: RwLock<Option<Peripheral>>,
-    color: RwLock<Color>,
-    dirty_details: RwLock<DirtyDetails>,
+    characteristic: Mutex<Option<Characteristic>>,
+    color: Mutex<Color>,
+    dirty_details: Mutex<DirtyDetails>,
 }
 
 impl Light {
@@ -31,8 +33,9 @@ impl Light {
             universe,
             address,
             peripheral: RwLock::new(None),
-            color: RwLock::new(Color::new(0, 0, 0)),
-            dirty_details: RwLock::new(DirtyDetails::new()),
+            color: Mutex::new(Color::new(0, 0, 0)),
+            characteristic: Mutex::new(None),
+            dirty_details: Mutex::new(DirtyDetails::new()),
         }
     }
 
@@ -47,7 +50,7 @@ impl Light {
     }
 
     async fn send_color(&self) -> Result<bool, impl Error> {
-        let (hue, saturation, brightness) = self.color.read().await.to_hsv();
+        let (hue, saturation, brightness) = { self.color.lock().unwrap().to_hsv() };
 
         let hue_lsb = (hue & 0xFF) as u8;
         let hue_msb = ((hue >> 8) & 0xFF) as u8;
@@ -55,38 +58,30 @@ impl Light {
         let mut color_cmd = vec![120, 134, 4, hue_lsb, hue_msb, saturation, brightness];
         color_cmd.push(Light::get_checksum(&color_cmd));
 
-        let lock = self.peripheral.read().await;
+        let cmd_char_lock = self.characteristic.lock().unwrap();
+        let peripheral_lock = self.peripheral.read().await;
 
-        // find the characteristic we want
-        if lock.is_some() {
-            let peripheral = lock.as_ref().unwrap();
-            let chars = peripheral.characteristics();
-            let maybe_cmd_char = chars.iter().find(|c| c.uuid == *write_uuid);
+        if peripheral_lock.is_some() && cmd_char_lock.is_some() {
+            let peripheral = peripheral_lock.as_ref().unwrap();
+            let cmd_char = cmd_char_lock.as_ref().unwrap();
 
-            match maybe_cmd_char {
-                Some(cmd_char) => {
-                    let dirty = self.dirty_details.read().await.is_dirty();
-                    if dirty {
-                        let send_result = peripheral
-                            .write(cmd_char, &color_cmd, WriteType::WithoutResponse)
-                            .await;
+            let dirty = self.dirty_details.lock().unwrap().is_dirty();
+            if dirty {
+                let send_result = peripheral
+                    .write(cmd_char, &color_cmd, WriteType::WithoutResponse)
+                    .await;
 
-                        self.dirty_details.write().await.clean();
-                        match send_result {
-                            Ok(_) => {
-                                return Ok(true);
-                            }
-                            Err(e) => {
-                                return Err(e);
-                            }
-                        }
-                    } else {
-                        return Ok(false);
+                self.dirty_details.lock().unwrap().clean();
+                match send_result {
+                    Ok(_) => {
+                        return Ok(true);
+                    }
+                    Err(e) => {
+                        return Err(e);
                     }
                 }
-                None => {
-                    return Err(btleplug::Error::NoSuchCharacteristic);
-                }
+            } else {
+                return Ok(false);
             }
         } else {
             return Err(btleplug::Error::NoSuchCharacteristic);
@@ -94,17 +89,16 @@ impl Light {
     }
 
     pub async fn set_color_rgb(&self, red: u8, green: u8, blue: u8) {
-        let read_lock = self.color.read().await;
-        if read_lock.red == red && read_lock.green == green && read_lock.blue == blue {
+        let current = { self.color.lock().unwrap().clone() };
+        let new_color = Color::new(red, green, blue);
+        if new_color.eq(&current) {
             return;
         }
-        drop(read_lock);
-
-        let mut lock = self.color.write().await;
-        lock.red = red;
-        lock.green = green;
-        lock.blue = blue;
-        self.dirty_details.write().await.dirty();
+        {
+            let mut lock = self.color.lock().unwrap();
+            *lock = new_color;
+            self.dirty_details.lock().unwrap().dirty();
+        }
     }
 
     pub async fn connect(&self, peripheral: Peripheral, terminal: &RwLock<TerminalUi>) {
@@ -114,23 +108,52 @@ impl Light {
             ratatui::style::Color::Yellow,
         );
 
-        let mut peripheral_lock = self.peripheral.write().await;
-        peripheral_lock.replace(peripheral);
+        {
+            let mut peripheral_lock = self.peripheral.write().await;
+            peripheral_lock.replace(peripheral);
 
-        if let Err(e) = peripheral_lock.as_ref().unwrap().connect().await {
-            peripheral_lock.take();
-            self.set_error_status(terminal, "Failed to connect", e)
-                .await;
-            return;
-        }
-        if let Err(e) = peripheral_lock.as_ref().unwrap().discover_services().await {
-            peripheral_lock.take();
-            self.set_error_status(terminal, "Failed to discover services", e)
-                .await;
-            return;
-        }
+            if let Err(e) = peripheral_lock.as_ref().unwrap().connect().await {
+                peripheral_lock.take();
+                self.set_error_status(terminal, "Failed to connect", e)
+                    .await;
+                return;
+            }
 
-        drop(peripheral_lock);
+            if let Err(e) = peripheral_lock.as_ref().unwrap().discover_services().await {
+                peripheral_lock.take();
+                self.set_error_status(terminal, "Failed to discover services", e)
+                    .await;
+                return;
+            }
+
+            let chars: Vec<Characteristic> = peripheral_lock
+                .as_ref()
+                .unwrap()
+                .characteristics()
+                .iter()
+                .cloned()
+                .collect();
+
+            let mut found = false;
+            chars.iter().for_each(|c| {
+                if c.uuid == *write_uuid {
+                    let mut char_lock = self.characteristic.lock().unwrap();
+                    char_lock.replace(c.clone());
+                    found = true;
+                }
+            });
+
+            if !found {
+                peripheral_lock.take();
+                self.set_error_status(
+                    terminal,
+                    "Failed to find characteristic",
+                    std::io::Error::new(std::io::ErrorKind::Other, "aargh"),
+                )
+                .await;
+                return;
+            }
+        }
 
         terminal.write().await.set_light_status(
             self.id.to_string().as_str(),
